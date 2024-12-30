@@ -43,6 +43,17 @@ def get_primary_key(table_name, schema='DS', conn_id='postgres-db'):
     return pk_columns
 
 
+def get_table_columns(table_name, schema='DS', conn_id='postgres-db'):
+    # Создаем подключение к базе данных с использованием PostgresHook
+    hook = PostgresHook(conn_id)
+    # Получаем SQLAlchemy engine для работы с базой данных
+    engine = hook.get_sqlalchemy_engine()
+    # Создаем инспектор для получения метаданных таблицы
+    inspector = inspect(engine)
+    # Получаем список столбцов таблицы
+    columns = [col['name'] for col in inspector.get_columns(table_name, schema=schema)]
+    return columns
+
 # Функция для записи логов выполнения задач
 def uploading_logs(context):
     # Получаем имя текущей задачи
@@ -78,12 +89,12 @@ def load_data_with_copy(table_name, schema='DS', conn_id='postgres-db'):
     # Получаем первичные ключи
     primary_keys = get_primary_key(table_name, schema, conn_id)
 
-    # Читаем CSV-файл с обработкой кодировки
+    # Читаем CSV-файл
+    csv_path = f'{PATH}{table_name}.csv'
     try:
-        df = pd.read_csv(f'{PATH}{table_name}.csv', delimiter=';', encoding='utf-8')
+        df = pd.read_csv(csv_path, delimiter=';', encoding='utf-8')
     except UnicodeDecodeError:
-        # Если UTF-8 не работает, пробуем Windows-1252
-        df = pd.read_csv(f'{PATH}{table_name}.csv', delimiter=';', encoding='Windows-1252')
+        df = pd.read_csv(csv_path, delimiter=';', encoding='Windows-1252')
 
     # Преобразуем имена столбцов в нижний регистр
     df.columns = [col.lower() for col in df.columns]
@@ -128,6 +139,57 @@ def load_data_with_copy(table_name, schema='DS', conn_id='postgres-db'):
     temp_csv_path = f'{PATH}{table_name}_temp.csv'
     df.to_csv(temp_csv_path, index=False, sep=';', encoding='utf-8')
 
+    # Выполняем SQL-запрос
+    pg_hook.copy_expert(sql, temp_csv_path)
+
+    # Удаляем временный файл
+    import os
+    os.remove(temp_csv_path)
+
+
+def load_md_ledger_account_s(table_name, schema='DS', conn_id='postgres-db'):
+    pg_hook = PostgresHook(conn_id)
+
+    # Получаем первичные ключи
+    primary_keys = get_primary_key(table_name, schema, conn_id)
+
+    # Читаем CSV-файл
+    csv_path = f'{PATH}{table_name}.csv'
+    try:
+        df = pd.read_csv(csv_path, delimiter=';', encoding='utf-8')
+    except UnicodeDecodeError:
+        df = pd.read_csv(csv_path, delimiter=';', encoding='Windows-1252')
+
+    # Преобразуем имена столбцов в нижний регистр
+    df.columns = [col.lower() for col in df.columns]
+
+    # Получаем список столбцов таблицы
+    columns_in_table = get_table_columns(table_name, schema, conn_id)
+
+    # Фильтруем столбцы, которые есть в CSV
+    columns_to_load = [col for col in columns_in_table if col in df.columns]
+    columns_str = ', '.join([f'"{col}"' for col in columns_to_load])
+
+    # Сохраняем DataFrame во временный CSV-файл
+    temp_csv_path = f'{PATH}{table_name}_temp.csv'
+    df.to_csv(temp_csv_path, index=False, sep=';', encoding='utf-8')
+
+    # Формируем SQL-запрос
+    sql = f"""
+        BEGIN;
+        CREATE TEMPORARY TABLE tmp_table 
+        (LIKE "{schema}"."{table_name}" INCLUDING DEFAULTS)
+        ON COMMIT DROP;
+
+        COPY tmp_table ({columns_str}) FROM STDIN DELIMITER ';' CSV HEADER;
+
+        INSERT INTO "{schema}"."{table_name}" ({columns_str})
+        SELECT {columns_str}
+        FROM tmp_table
+        ON CONFLICT ({', '.join([f'"{pk}"' for pk in primary_keys])}) DO UPDATE
+        SET {', '.join([f'"{col}"=EXCLUDED."{col}"' for col in columns_to_load if col not in primary_keys])};
+        COMMIT;
+    """
     # Выполняем SQL-запрос
     pg_hook.copy_expert(sql, temp_csv_path)
 
@@ -232,6 +294,13 @@ with DAG(
             task = PythonOperator(
                 task_id=table,
                 python_callable=load_ft_posting_f,
+                on_success_callback=uploading_logs
+            )
+        elif table == 'md_ledger_account_s':
+            task = PythonOperator(
+                task_id=table,
+                python_callable=load_md_ledger_account_s,
+                op_kwargs={'table_name': table},  # Передаем имя таблицы
                 on_success_callback=uploading_logs
             )
         else:
