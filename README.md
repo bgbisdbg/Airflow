@@ -28,3 +28,5 @@
 ```
 docker-compose up
 ```
+
+Ссылка на видо с демонстрацией <a href="https://disk.yandex.ru/i/SKjWxkwKqzAP8g">тут</a>
