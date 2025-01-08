@@ -6,7 +6,7 @@ from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
 from airflow.configuration import conf
 from airflow.models import Variable
 from airflow.operators.dummy_operator import DummyOperator
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy import inspect
 import pandas as pd
 
@@ -43,6 +43,7 @@ def get_primary_key(table_name, schema='DS', conn_id='postgres-db'):
     return pk_columns
 
 
+# Функция для получения столбцов
 def get_table_columns(table_name, schema='DS', conn_id='postgres-db'):
     # Создаем подключение к базе данных с использованием PostgresHook
     hook = PostgresHook(conn_id)
@@ -53,6 +54,7 @@ def get_table_columns(table_name, schema='DS', conn_id='postgres-db'):
     # Получаем список столбцов таблицы
     columns = [col['name'] for col in inspector.get_columns(table_name, schema=schema)]
     return columns
+
 
 # Функция для записи логов выполнения задач
 def uploading_logs(context):
@@ -155,10 +157,8 @@ def load_md_ledger_account_s(table_name, schema='DS', conn_id='postgres-db'):
 
     # Читаем CSV-файл
     csv_path = f'{PATH}{table_name}.csv'
-    try:
-        df = pd.read_csv(csv_path, delimiter=';', encoding='utf-8')
-    except UnicodeDecodeError:
-        df = pd.read_csv(csv_path, delimiter=';', encoding='Windows-1252')
+
+    df = pd.read_csv(csv_path, delimiter=';', encoding='utf-8')
 
     # Преобразуем имена столбцов в нижний регистр
     df.columns = [col.lower() for col in df.columns]
@@ -241,6 +241,52 @@ def load_ft_posting_f():
     conn.close()
 
 
+# Определение функции для расчета оборотов за январь 2018 года
+def calculate_turnover_january_task(conn_id='postgres-db'):
+    # Установка начальной даты (1 января 2018 года)
+    start_date = datetime(2018, 1, 1).date()
+    # Установка конечной даты (31 января 2018 года)
+    end_date = datetime(2018, 1, 31).date()
+
+    # Создание подключения к базе данных PostgreSQL с использованием переданного идентификатора соединения
+    pg_hook = PostgresHook(conn_id)
+    # Получение объекта соединения с базой данных
+    conn = pg_hook.get_conn()
+    # Создание курсора для выполнения SQL-запросов
+    cursor = conn.cursor()
+
+    # Инициализация переменной текущей даты, начиная с начальной даты
+    current_date = start_date
+    # Цикл, который выполняется, пока текущая дата не превысит конечную дату
+    while current_date <= end_date:
+        # Выполнение SQL-запроса для вызова функции fill_account_turnover_f с текущей датой в качестве аргумента
+        cursor.execute('SELECT "DM".fill_account_turnover_f(%s);', (current_date,))
+        # Фиксация изменений в базе данных
+        conn.commit()
+        # Увеличение текущей даты на один день
+        current_date += timedelta(days=1)
+
+    # Закрытие соединения с базой данных
+    conn.close()
+
+
+def calculate_balance_january_task(conn_id='postgres-db'):
+    start_date = datetime(2018, 1, 1).date()
+    end_date = datetime(2018, 1, 31).date()
+
+    pg_hook = PostgresHook(conn_id)
+    conn = pg_hook.get_conn()
+    cursor = conn.cursor()
+
+    current_date = start_date
+    while current_date <= end_date:
+        cursor.execute('SELECT "DM".fill_account_balance_f(%s);', (current_date,))
+        conn.commit()
+        current_date += timedelta(days=1)
+
+    conn.close
+
+
 # Аргументы по умолчанию для DAG
 default_args = {
     'owner': 'dima',
@@ -264,6 +310,12 @@ with DAG(
         on_success_callback=uploading_logs
     )
 
+    create_tables_and_functions = SQLExecuteQueryOperator(
+        task_id='create_tables_and_functions',
+        conn_id='postgres-db',
+        sql='sql/create_vitrin.sql',
+        on_success_callback=uploading_logs
+    )
     # Задача для создания схемы DS
     create_sheme = SQLExecuteQueryOperator(
         task_id='create_sheme',
@@ -285,6 +337,18 @@ with DAG(
         task_id='pause',
         on_success_callback=uploading_logs
 
+    )
+
+    calculate_turnover_january_task = PythonOperator(
+        task_id='calculate_turnover_january_task',
+        python_callable=calculate_turnover_january_task,
+        on_success_callback=uploading_logs
+    )
+
+    calculate_balance_january_task = PythonOperator(
+        task_id='calculate_balance_january_task',
+        python_callable=calculate_balance_january_task,
+        on_success_callback=uploading_logs
     )
 
     # Создаем задачи для каждой таблицы
@@ -318,11 +382,22 @@ with DAG(
         on_success_callback=uploading_logs
     )
 
+    # Пустая задача для разделения этапов
+    pause2 = EmptyOperator(
+        task_id='pause2',
+        on_success_callback=uploading_logs
+
+    )
     # Определение порядка выполнения задач
     (
             logs_etl_started
             >> [create_sheme, create_logs_sheme]
             >> pause
             >> tasks
+            >> pause2
+            >> create_tables_and_functions
+            >> calculate_turnover_january_task
+            >> calculate_balance_january_task
             >> logs_etl_end
+
     )
