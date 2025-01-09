@@ -27,7 +27,7 @@
 docker-compose up
 ```
 
-Ссылка на видо с демонстрацией <a href="https://disk.yandex.ru/i/SKjWxkwKqzAP8g">тут</a>
+Ссылка на видо с демонстрацией <a href="https://disk.yandex.ru/i/CGkeQp4l8Gql2A">тут</a>
 
 
 ## Задача 1.2
