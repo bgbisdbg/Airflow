@@ -121,3 +121,6 @@ docker-compose up
 
 ```sql
 CALL dm.fill_f101_round_f('2018-02-01');
+```
+
+Ссылка на видо с демонстрацией <a href="https://disk.yandex.ru/i/_7e5rOrFaiXeAw">тут</a>
