@@ -58,29 +58,27 @@ def get_table_columns(table_name, schema='DS', conn_id='postgres-db'):
 
 # Функция для записи логов выполнения задач
 def uploading_logs(context):
-    # Получаем имя текущей задачи
     task_instance = context['task_instance'].task_id
-    # Получаем статус выполнения задачи
     status = context['task_instance'].state
-    # Получаем время выполнения задачи и преобразуем его в timestamp
-    ts = context['task_instance'].execution_date.timestamp()
-    # Преобразуем timestamp в строку в формате ISO
-    ts = datetime.fromtimestamp(ts).isoformat(sep='T')
+    execution_ts = context['task_instance'].start_date
+    event_ts = datetime.now()
 
-    # Указываем схему и таблицу для записи логов
+    exception = context.get('exception', None)
+    error_message = str(exception) if exception else None
+
     logs_schema = 'logs'
     logs_table = 'csv_to_dag'
 
-    # Формируем SQL-запрос для вставки данных в таблицу логов
     query = f"""
-        INSERT INTO {logs_schema}.{logs_table} (execution_datetime, event_datetime, event_name, event_status)
-        VALUES ('{ts}', '{datetime.now().isoformat(sep='T')}', '{task_instance}', '{status}');
+        INSERT INTO {logs_schema}.{logs_table} 
+            (execution_datetime, event_datetime, event_name, event_status, error_message)
+        VALUES 
+            ('{execution_ts}', '{event_ts}', '{task_instance}', '{status}', '{error_message}');
     """
 
-    # Используем метод run для выполнения запроса
-    pg_hook = PostgresHook(postgres_conn_id='postgres-db')
+    print(f"Executing SQL query: {query}")
 
-    # Выполняем SQL-запрос
+    pg_hook = PostgresHook(postgres_conn_id='postgres-db')
     pg_hook.run(query)
 
 
@@ -307,21 +305,24 @@ with DAG(
     # Задача для логирования начала ETL
     logs_etl_started = DummyOperator(
         task_id='logs_etl_started',
-        on_success_callback=uploading_logs
+        on_success_callback=uploading_logs,
+        on_failure_callback=uploading_logs
     )
 
     create_tables_and_functions = SQLExecuteQueryOperator(
         task_id='create_tables_and_functions',
         conn_id='postgres-db',
         sql='sql/create_vitrin.sql',
-        on_success_callback=uploading_logs
+        on_success_callback=uploading_logs,
+        on_failure_callback=uploading_logs
     )
     # Задача для создания схемы DS
     create_sheme = SQLExecuteQueryOperator(
         task_id='create_sheme',
         conn_id='postgres-db',
         sql='sql/create_sheme_ds.sql',
-        on_success_callback=uploading_logs
+        on_success_callback=uploading_logs,
+        on_failure_callback=uploading_logs
     )
 
     # Задача для создания схемы logs
@@ -329,26 +330,47 @@ with DAG(
         task_id='create_logs_sheme',
         conn_id='postgres-db',
         sql='sql/create_logs_sheme.sql',
-        on_success_callback=uploading_logs
+        on_success_callback=uploading_logs,
+        on_failure_callback=uploading_logs
+    )
+
+    # Задача для создания таблицы форма 101
+    create_101_form = SQLExecuteQueryOperator(
+        task_id='create_101_form',
+        conn_id='postgres-db',
+        sql='sql/101_forms.sql',
+        on_success_callback=uploading_logs,
+        on_failure_callback=uploading_logs
+    )
+    #Задача для заполнение данными формы 101
+    fill_101_form = SQLExecuteQueryOperator(
+        task_id='fill_101_form',
+        conn_id='postgres-db',
+        sql="CALL \"DM\".fill_f101_round_f('2018-02-01');",
+        on_success_callback=uploading_logs,
+        on_failure_callback=uploading_logs
     )
 
     # Пустая задача для разделения этапов
     pause = EmptyOperator(
         task_id='pause',
-        on_success_callback=uploading_logs
+        on_success_callback=uploading_logs,
+        on_failure_callback=uploading_logs
 
     )
 
     calculate_turnover_january_task = PythonOperator(
         task_id='calculate_turnover_january_task',
         python_callable=calculate_turnover_january_task,
-        on_success_callback=uploading_logs
+        on_success_callback=uploading_logs,
+        on_failure_callback=uploading_logs
     )
 
     calculate_balance_january_task = PythonOperator(
         task_id='calculate_balance_january_task',
         python_callable=calculate_balance_january_task,
-        on_success_callback=uploading_logs
+        on_success_callback=uploading_logs,
+        on_failure_callback=uploading_logs
     )
 
     # Создаем задачи для каждой таблицы
@@ -358,34 +380,39 @@ with DAG(
             task = PythonOperator(
                 task_id=table,
                 python_callable=load_ft_posting_f,
-                on_success_callback=uploading_logs
+                on_success_callback=uploading_logs,
+                on_failure_callback=uploading_logs
             )
         elif table == 'md_ledger_account_s':
             task = PythonOperator(
                 task_id=table,
                 python_callable=load_md_ledger_account_s,
                 op_kwargs={'table_name': table},  # Передаем имя таблицы
-                on_success_callback=uploading_logs
+                on_success_callback=uploading_logs,
+                on_failure_callback=uploading_logs
             )
         else:
             task = PythonOperator(
                 task_id=table,
                 python_callable=load_data_with_copy,
                 op_kwargs={'table_name': table},
-                on_success_callback=uploading_logs
+                on_success_callback=uploading_logs,
+                on_failure_callback=uploading_logs
             )
         tasks.append(task)
 
     # Задача для логирования начала ETL
     logs_etl_end = DummyOperator(
         task_id='logs_etl_end',
-        on_success_callback=uploading_logs
+        on_success_callback=uploading_logs,
+        on_failure_callback=uploading_logs
     )
 
     # Пустая задача для разделения этапов
     pause2 = EmptyOperator(
         task_id='pause2',
-        on_success_callback=uploading_logs
+        on_success_callback=uploading_logs,
+        on_failure_callback=uploading_logs
 
     )
     # Определение порядка выполнения задач
@@ -398,6 +425,8 @@ with DAG(
             >> create_tables_and_functions
             >> calculate_turnover_january_task
             >> calculate_balance_january_task
+            >> create_101_form
+            >> fill_101_form
             >> logs_etl_end
 
     )

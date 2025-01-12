@@ -5,5 +5,6 @@ create table if not exists
 		execution_datetime TIMESTAMP not null,
 		event_datetime TIMESTAMP not null,
 		event_name VARCHAR(30) not null,
-		event_status VARCHAR(30)
+		event_status VARCHAR(30),
+        error_message TEXT
 );
