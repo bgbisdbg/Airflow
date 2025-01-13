@@ -9,7 +9,7 @@ from airflow.operators.dummy_operator import DummyOperator
 from datetime import datetime, timedelta
 from sqlalchemy import inspect
 import pandas as pd
-
+import os
 # Получаем текущую дату и время
 date_now = datetime.now()
 
@@ -285,6 +285,32 @@ def calculate_balance_january_task(conn_id='postgres-db'):
     conn.close
 
 
+def export_to_csv():
+    # Подключение к базе данных
+    pg_hook = PostgresHook(postgres_conn_id='postgres-db')
+    conn = pg_hook.get_conn()
+
+    # SQL-запрос для выборки данных из таблицы
+    query = 'SELECT * FROM "DM".dm_f101_round_f;'
+
+    # Чтение данных в DataFrame
+    df = pd.read_sql(query, conn)
+
+    # Путь к папке reports
+    reports_path = 'reports'
+
+    # Проверка, существует ли папка reports, и создание, если её нет
+    if not os.path.exists(reports_path):
+        os.makedirs(reports_path)
+
+    # Сохранение данных в CSV-файл
+    csv_path = os.path.join(reports_path, 'dm_f101_round_f.csv')
+    df.to_csv(csv_path, index=False, encoding='utf-8')
+
+    # Закрытие соединения
+    conn.close()
+
+
 # Аргументы по умолчанию для DAG
 default_args = {
     'owner': 'dima',
@@ -415,6 +441,14 @@ with DAG(
         on_failure_callback=uploading_logs
 
     )
+
+    #Экпорт отчёта 101 в csv
+    export_reports_101 = PythonOperator(
+        task_id='export_to_csv',
+        python_callable=export_to_csv,
+        on_failure_callback=uploading_logs
+    )
+
     # Определение порядка выполнения задач
     (
             logs_etl_started
@@ -427,6 +461,7 @@ with DAG(
             >> calculate_balance_january_task
             >> create_101_form
             >> fill_101_form
+            >> export_reports_101
             >> logs_etl_end
 
     )
