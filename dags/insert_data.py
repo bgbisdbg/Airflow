@@ -305,7 +305,7 @@ def export_to_csv():
 
     # Сохранение данных в CSV-файл
     csv_path = os.path.join(reports_path, 'dm_f101_round_f.csv')
-    df.to_csv(csv_path, index=False, encoding='utf-8')
+    df.to_csv(csv_path, index=False, sep=';', encoding='utf-8')
 
     # Закрытие соединения
     conn.close()
@@ -455,6 +455,7 @@ with DAG(
             >> [create_sheme, create_logs_sheme]
             >> pause
             >> tasks
+            >> import_reports_101
             >> pause2
             >> create_tables_and_functions
             >> calculate_turnover_january_task
